@@ -1,8 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { DenemeModule } from './deneme/deneme.module';
 
 @Module({
-  imports: [ConfigModule.forRoot(), DenemeModule],
+  imports: [ConfigModule.forRoot()],
 })
 export class AppModule {}
