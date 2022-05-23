@@ -1,5 +1,4 @@
 import { Schema } from 'mongoose';
-import { boolean } from 'yup';
 
 export interface User {
   firstName: string;
@@ -9,13 +8,17 @@ export interface User {
   password: string;
   organisationId: string | null;
   isEmailVerified: boolean;
+  verificationCode: {
+    code: string;
+    createdAt: Date;
+  };
 }
 
 export const UserSchema = new Schema<User>({
   avatar: {
     type: String,
     required: false,
-    default: 'https://picsum.photos/256',
+    default: null,
   },
   firstName: {
     type: String,
@@ -36,11 +39,16 @@ export const UserSchema = new Schema<User>({
   organisationId: {
     type: String,
     required: false,
+    default: null,
   },
   isEmailVerified: {
     type: Boolean,
     required: false,
     default: false,
+  },
+  verificationCode: {
+    type: Object,
+    default: null,
   },
 });
 

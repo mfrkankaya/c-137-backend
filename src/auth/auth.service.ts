@@ -1,8 +1,10 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { Model } from 'mongoose';
+import { generateSixDigitsCode } from 'src/common/utils';
+import { MailService } from 'src/mail/mail.service';
 import { LoginDTO, RegisterDTO } from './auth.dto';
 import { User } from './auth.model';
 import { emailYup, getUserSecureDetails, passwordYup } from './auth.utils';
@@ -11,6 +13,7 @@ import { emailYup, getUserSecureDetails, passwordYup } from './auth.utils';
 export class AuthService {
   constructor(
     private jwtService: JwtService,
+    private mailService: MailService,
     @InjectModel('User') private readonly userModel: Model<User>,
   ) {}
 
@@ -21,36 +24,27 @@ export class AuthService {
     ]);
 
     if (!isEmailValid || !isPasswordValid || !firstName || !lastName)
-      throw new HttpException(
-        'bad-credentials',
-        HttpStatus.UNPROCESSABLE_ENTITY,
-      );
+      return { success: false, error: 'bad-credentials', data: null };
 
-    try {
-      const storedUser = await this.userModel.findOne({ email });
-      if (storedUser)
-        throw new HttpException('already-exists', HttpStatus.CONFLICT);
+    const storedUser = await this.userModel.findOne({ email });
+    if (storedUser)
+      return { success: false, error: 'user-already-exist', data: null };
 
-      const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const newUser = new this.userModel({
+      firstName,
+      lastName,
+      email,
+      password: passwordHash,
+      organisationId: null,
+      isEmailVerified: false,
+    });
 
-      const newUser = new this.userModel({
-        firstName,
-        lastName,
-        email,
-        password: passwordHash,
-        organisationId: null,
-        isEmailVerified: false,
-      });
+    await newUser.save();
 
-      await newUser.save();
+    this.sendVerificationCode(email);
 
-      return { success: true, error: false, data: null };
-    } catch (error) {
-      throw new HttpException(
-        'unknown-error',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
+    return { success: true, error: false, data: null };
   }
 
   async loginUser({ email, password }: LoginDTO) {
@@ -60,55 +54,75 @@ export class AuthService {
     ]);
 
     if (!isEmailValid || !isPasswordValid)
-      throw new HttpException(
-        'bad-credentials',
-        HttpStatus.UNPROCESSABLE_ENTITY,
-      );
+      return { success: false, error: 'bad-credentials', data: null };
 
-    try {
-      const user = await this.userModel.findOne({ email });
-      if (!user)
-        throw new HttpException('wrong-credentials', HttpStatus.UNAUTHORIZED);
+    const user = await this.userModel.findOne({ email });
+    if (!user)
+      return { success: false, error: 'wrong-credentials', data: null };
 
-      const isPasswordRight = bcrypt.compare(password, user.password);
-      if (!isPasswordRight)
-        throw new HttpException('wrong-credentials', HttpStatus.UNAUTHORIZED);
+    const isPasswordRight = bcrypt.compare(password, user.password);
+    if (!isPasswordRight)
+      return { success: false, error: 'wrong-credentials', data: null };
 
-      const token = this.jwtService.sign(
-        { userId: user.id },
-        { secret: process.env.JWT_SECRET, expiresIn: '30d' },
-      );
+    const token = this.jwtService.sign(
+      { userId: user.id },
+      { secret: process.env.JWT_SECRET, expiresIn: '30d' },
+    );
 
-      return { success: true, error: false, data: { token } };
-    } catch (error) {
-      throw new HttpException(
-        'unknown-error',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
+    return { success: true, error: false, data: { token } };
   }
 
   async getUserDetails(token: string) {
-    let user: { userId: string };
+    const user = await this.jwtService.verifyAsync<{ userId: string }>(token, {
+      secret: process.env.JWT_SECRET,
+    });
 
-    try {
-      user = await this.jwtService.verifyAsync<{ userId: string }>(token, {
-        secret: process.env.JWT_SECRET,
-      });
-    } catch (error) {
-      throw new HttpException('unauthorized', HttpStatus.UNAUTHORIZED);
-    }
+    const userDetails = await this.userModel.findById(user.userId);
+    const userSecureDetails = getUserSecureDetails(userDetails);
 
-    try {
-      const userDetails = await this.userModel.findById(user.userId);
-      const userSecureDetails = getUserSecureDetails(userDetails);
+    return { success: true, error: false, data: { user: userSecureDetails } };
+  }
 
-      return { success: true, error: false, data: { user: userSecureDetails } };
-    } catch (error) {
-      throw new HttpException(
-        'unknown-error',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
+  async sendVerificationCode(email: string) {
+    const verificationCode = generateSixDigitsCode();
+    const user = await this.userModel.findOneAndUpdate({
+      email,
+      verificationCode,
+    });
+    if (!user) return { success: false, error: 'user-not-found', data: null };
+
+    if (user.isEmailVerified)
+      return { success: false, error: 'email-already-verified', data: null };
+
+    this.mailService.sendVerificationCode({
+      email,
+      code: verificationCode.code,
+    });
+
+    return { success: true, error: false, data: null };
+  }
+
+  async verifyEmail(token: string, code: string) {
+    const { userId } = await this.jwtService.verifyAsync(token, {
+      secret: process.env.JWT_SECRET,
+    });
+
+    const user = await this.userModel.findById(userId);
+    if (!user) return { success: false, error: 'user-not-found', data: null };
+
+    if (user.isEmailVerified)
+      return { success: false, error: 'email-already-verified', data: null };
+
+    const now = new Date().getTime();
+    const codeCreatedAt = new Date(user.verificationCode.createdAt).getTime();
+    const isCodeExpired = now - codeCreatedAt > 1000 * 60 * 5;
+    if (isCodeExpired)
+      return { success: false, error: 'code-expired', data: null };
+
+    if (code !== user.verificationCode.code)
+      return { success: false, error: 'wrong-code', data: null };
+
+    await this.userModel.findByIdAndUpdate(userId, { isEmailVerified: true });
+    return { success: true, error: false, data: null };
   }
 }
