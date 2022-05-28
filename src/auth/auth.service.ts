@@ -74,55 +74,75 @@ export class AuthService {
   }
 
   async getUserDetails(token: string) {
-    const user = await this.jwtService.verifyAsync<{ userId: string }>(token, {
-      secret: process.env.JWT_SECRET,
-    });
+    if (!token) return createErrorResponse('token-required');
 
-    const userDetails = await this.userModel.findById(user.userId);
-    const userSecureDetails = getUserSecureDetails(userDetails);
+    try {
+      const user = await this.jwtService.verifyAsync<JwtData>(token, {
+        secret: process.env.JWT_SECRET,
+      });
 
-    return createSuccessResponse({ user: userSecureDetails });
+      const userDetails = await this.userModel.findById(user.userId);
+      if (!userDetails) return createErrorResponse('user-not-found');
+
+      const userSecureDetails = getUserSecureDetails(userDetails);
+
+      return createSuccessResponse({ user: userSecureDetails });
+    } catch (error) {
+      if (error.message === 'invalid token')
+        return createErrorResponse('invalid-token');
+      return createErrorResponse('unknown-error');
+    }
   }
 
   async sendVerificationCode(email: string) {
-    const verificationCode = generateSixDigitsCode();
-    const user = await this.userModel.findOneAndUpdate({
-      email,
-      verificationCode,
-    });
-    if (!user) return createErrorResponse('user-not-found');
+    try {
+      const verificationCode = generateSixDigitsCode();
+      const user = await this.userModel.findOneAndUpdate({
+        email,
+        verificationCode,
+      });
+      if (!user) return createErrorResponse('user-not-found');
 
-    if (user.isEmailVerified)
-      return createErrorResponse('email-already-verified');
+      if (user.isEmailVerified)
+        return createErrorResponse('email-already-verified');
 
-    this.mailService.sendVerificationCode({
-      email,
-      code: verificationCode.code,
-    });
+      this.mailService.sendVerificationCode({
+        email,
+        code: verificationCode.code,
+      });
 
-    return createSuccessResponse(null);
+      return createSuccessResponse(null);
+    } catch (error) {
+      return createErrorResponse('unknown-error');
+    }
   }
 
   async verifyEmail(token: string, code: string) {
-    const { userId } = await this.jwtService.verifyAsync(token, {
-      secret: process.env.JWT_SECRET,
-    });
+    try {
+      const { userId } = await this.jwtService.verifyAsync<JwtData>(token, {
+        secret: process.env.JWT_SECRET,
+      });
 
-    const user = await this.userModel.findById(userId);
-    if (!user) return createErrorResponse('user-not-found');
+      const user = await this.userModel.findById(userId);
+      if (!user) return createErrorResponse('user-not-found');
 
-    if (user.isEmailVerified)
-      return createErrorResponse('email-already-verified');
+      if (user.isEmailVerified)
+        return createErrorResponse('email-already-verified');
 
-    const now = new Date().getTime();
-    const codeCreatedAt = new Date(user.verificationCode.createdAt).getTime();
-    const isCodeExpired = now - codeCreatedAt > 1000 * 60 * 5;
-    if (isCodeExpired) return createErrorResponse('code-expired');
+      const now = new Date().getTime();
+      const codeCreatedAt = new Date(user.verificationCode.createdAt).getTime();
+      const isCodeExpired = now - codeCreatedAt > 1000 * 60 * 5;
+      if (isCodeExpired) return createErrorResponse('code-expired');
 
-    if (code !== user.verificationCode.code)
-      return createErrorResponse('wrong-code');
+      if (code !== user.verificationCode.code)
+        return createErrorResponse('wrong-code');
 
-    await this.userModel.findByIdAndUpdate(userId, { isEmailVerified: true });
-    return createSuccessResponse(null);
+      await this.userModel.findByIdAndUpdate(userId, { isEmailVerified: true });
+      return createSuccessResponse(null);
+    } catch (error) {
+      if (error.message === 'invalid token')
+        return createErrorResponse('invalid-token');
+      return createErrorResponse('unknown-error');
+    }
   }
 }

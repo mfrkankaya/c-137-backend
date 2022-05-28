@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from './auth/auth.module';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
+import { OrganisationModule } from './organisation/organisation.module';
 // import { BullModule } from 'nest-bull';
 
 // const bullModule = BullModule.forRoot({});
@@ -38,6 +39,7 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handleba
     }),
     MongooseModule.forRoot(process.env.MONGO),
     AuthModule,
+    OrganisationModule,
   ],
 })
 export class AppModule {}
